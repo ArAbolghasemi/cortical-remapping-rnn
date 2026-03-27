@@ -1,0 +1,12 @@
+# may not be complete, but should cover the main dependencies for a typical machine learning project
+torch
+numpy
+matplotlib
+scipy
+scikit-learn
+pandas
+jupyter
+ipykernel
+pytest
+tqdm
+matplotlib

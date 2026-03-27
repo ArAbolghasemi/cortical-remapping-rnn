@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cortical-remapping-rnn"
+version = "0.1.0"
+description = "RNN models for BCI remapping and manifold analysis"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.packages.find]
+include = ["core*"]
