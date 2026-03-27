@@ -255,19 +255,3 @@ class MotorCortexRNN(nn.Module):
         J = (1.0 - self.alpha) * I + self.alpha * (D @ self.W_rec)
         return J
 
-'''
-if __name__ == "__main__":
-    cfg = RNNConfig(device="cpu")
-    model = MotorCortexRNN(cfg)
-
-    batch_size = 8
-    T = 150
-    x = torch.randn(batch_size, T, cfg.n_inp)
-
-    out = model(x, noise=True)
-    print("states:", out["states"].shape)   # [8, 150, 200]
-    print("h_final:", out["h_final"].shape) # [8, 200]
-
-    model.set_train_mode("input")       # upstream plasticity only
-    model.set_train_mode("recurrent")   # local recurrent plasticity only
-    model.set_train_mode("all")'''

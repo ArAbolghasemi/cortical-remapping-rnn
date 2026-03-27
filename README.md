@@ -12,3 +12,6 @@ state-bci-rnn/
 ├── requirements.txt
 ├── pyproject.toml
 └── README.md
+
+
+TODO: make the noise Poiss

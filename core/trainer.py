@@ -326,7 +326,7 @@ class BCITrainer:
         eval_every: Optional[int] = 10,
         eval_batch_size: int = 64,
         input_noise_train: bool = True,
-        rnn_noise_train: bool = False,
+        rnn_noise_train: bool = True,
         input_noise_eval: bool = False,
         rnn_noise_eval: bool = False,
         print_every: Optional[int] = 10,
