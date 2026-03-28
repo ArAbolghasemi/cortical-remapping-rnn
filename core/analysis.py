@@ -385,6 +385,7 @@ def analyze_geometry_windows(
         stride_trials=stride_trials,
     )
 
+    #TODO: found corresponding trial to window 
     results = {
         "X": X,
         "A": A,
@@ -483,14 +484,14 @@ def fit_global_pca(
     A_pca = A @ pca.components_.T
 
     return {
-        "pca": pca,
-        "X": X,
-        "A": A,
-        "X_pca": X_pca,
-        "A_pca": A_pca,
-        "epoch_ids": epoch_ids,
-        "selected_snapshots": snaps,
-        "explained_variance_ratio": pca.explained_variance_ratio_,
+        "pca": pca, # PCA object with components, explained variance, etc.
+        "X": X,     # original trajectories [n_trials, time, n_neurons]
+        "A": A,     # original decoder axes [n_trials, n_neurons]
+        "X_pca": X_pca,                                             # trajectories in PCA space [n_trials, time, n_pca]
+        "A_pca": A_pca,                                             # decoder axes in PCA space [n_trials, n_pca]
+        "epoch_ids": epoch_ids,                                     # epoch labels for each time point [time]
+        "selected_snapshots": snaps,                                # list of snapshots used in PCA
+        "explained_variance_ratio": pca.explained_variance_ratio_,  # variance explained by each PC
     }
 
 

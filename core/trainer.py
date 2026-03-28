@@ -12,16 +12,21 @@ from .losses import (
     weighted_cursor_mse,
 )
 
-
 @dataclass
 class TrainerConfig:
-    train_mode: str = "input"          # "input", "recurrent", "all"
+    train_mode: str = "all"          # "input", "recurrent", "all"
     lr: float = 1e-3
     weight_decay: float = 0.0
     grad_clip_norm: Optional[float] = 1.0
     device: str = "cpu"
     freeze_trial_inputs: bool = True
 
+    # input scaling
+    input_scaling_mode: str = "cursor_mean"   # "none", "cursor_mean"
+    input_scale_constant: float = 0     # used if you want fixed scaling
+    input_scale_gain: float = 1.0      # gain for cursor-dependent scaling
+    input_scale_offset: float = 0.0    # optional offset
+    detach_scaling_signal: bool = True # usually safer
 
 @dataclass
 class TrainHistory:
@@ -96,6 +101,49 @@ class BCITrainer:
             "late": trial["epoch_inputs"]["late"].detach().clone().to(self.cfg.device),
         }
         self.fixed_epoch_ids = trial["epoch_ids"].detach().clone().to(self.cfg.device)
+    
+    def _compute_input_scale(
+        self,
+        cursor: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Returns a scalar scale factor for the batch input.
+
+        Modes
+        -----
+        "none":
+            No scaling (factor = 1).
+        "cursor_mean":
+            scale = offset + constant + gain * mean(cursor)
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar tensor on the trainer device.
+        """
+        mode = self.cfg.input_scaling_mode
+
+        if mode == "none":
+            return torch.tensor(1.0, device=self.cfg.device)
+
+        if mode == "cursor_mean":
+            if cursor is None:
+                raise ValueError("cursor must be provided when input_scaling_mode='cursor_mean'.")
+
+            cursor_mean = cursor.mean()
+            if self.cfg.detach_scaling_signal:
+                cursor_mean = cursor_mean.detach()
+
+            scale = (
+                self.cfg.input_scale_offset
+                + self.cfg.input_scale_constant
+                + self.cfg.input_scale_gain * cursor_mean
+            )
+            scale = torch.clamp(scale, min=0.1, max=10)
+            return scale
+
+        raise ValueError(f"Unknown input_scaling_mode: {mode}") 
+    
 
     @torch.no_grad()
     def resample_fixed_trial_inputs(self) -> None:
@@ -134,11 +182,31 @@ class BCITrainer:
             )
             epoch_ids = trial["epoch_ids"].to(self.cfg.device)
 
-        x = trial["x"].to(self.cfg.device)
+        x_raw = trial["x"].to(self.cfg.device)
 
-        out = self.rnn(x, noise=rnn_noise)
-        states = out["states"]                     # [batch, time, n_rec]
-        cursor = self.decoder(states)             # [batch, time]
+        #  input scaling
+        if self.cfg.input_scaling_mode == "none":
+            input_scale = torch.tensor(1.0, device=self.cfg.device)
+            x = x_raw * input_scale
+            out = self.rnn(x, noise=rnn_noise)
+            states = out["states"]
+            cursor = self.decoder(states)
+
+        elif self.cfg.input_scaling_mode == "cursor_mean":
+            # first pass: get cursor mean from unscaled input
+            out_pre = self.rnn(x_raw, noise=rnn_noise)
+            states_pre = out_pre["states"]
+            cursor_pre = self.decoder(states_pre)
+
+            input_scale = self._compute_input_scale(cursor_pre)
+
+            # second pass: actual forward with scaled input
+            x = x_raw * input_scale
+            out = self.rnn(x, noise=rnn_noise)
+            states = out["states"]
+            cursor = self.decoder(states)
+        else:
+            raise ValueError(f"Unknown input_scaling_mode: {self.cfg.input_scaling_mode}")
 
         target_out = make_cursor_target(
             batch_size=batch_size,
@@ -152,6 +220,8 @@ class BCITrainer:
 
         return {
             "x": x,
+            "x_raw": x_raw,
+            "input_scale": input_scale,
             "epoch_ids": epoch_ids,
             "states": states,
             "cursor": cursor,
@@ -173,10 +243,13 @@ class BCITrainer:
         def _masked_mean(x: torch.Tensor, mask: torch.Tensor) -> float:
             return float(x[:, mask].mean().item())
 
+        input_scale = batch.get("input_scale", torch.tensor(1.0, device=cursor.device))
+
         return {
             "loss_value": float(loss.item()),
             "cursor_mean": float(cursor.mean().item()),
             "cursor_std": float(cursor.std().item()),
+            "input_scale": float(input_scale.item()),
             "baseline_cursor_mean": _masked_mean(cursor, baseline_mask),
             "task_cursor_mean": _masked_mean(cursor, task_mask),
             "late_cursor_mean": _masked_mean(cursor, late_mask),
@@ -206,6 +279,8 @@ class BCITrainer:
             "axis": self.decoder.axis.detach().cpu().clone(),
             "bci_indices": self.decoder.neuron_indices.detach().cpu().clone(),
             "loss": float(batch["loss"].item()),
+            "input_scale": float(batch["input_scale"].item()) if "input_scale" in batch else 1.0,
+            "x_raw": batch["x_raw"][b].detach().cpu() if "x_raw" in batch else None,
         }
 
     @torch.no_grad()
@@ -273,7 +348,7 @@ class BCITrainer:
         self,
         batch_size: int = 32,
         input_noise: bool = True,
-        rnn_noise: bool = False,
+        rnn_noise: bool = True,
         step: int = -1,
         phase_name: str = "train",
         save_snapshot: bool = False,
