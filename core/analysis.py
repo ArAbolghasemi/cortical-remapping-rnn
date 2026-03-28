@@ -93,7 +93,7 @@ def get_last_k_time_mask(T: int, last_k_time: int) -> np.ndarray:
 def make_backward_windows(
     n_trials: int,
     window_size_trials: int,
-    stride_trials: int = 1,
+    stride_trials: Optional[int] = None,
 ) -> List[Tuple[int, int]]:
     """
     Backward-looking windows ending at each trial T.
@@ -105,6 +105,8 @@ def make_backward_windows(
       if window_size_trials = 10 and end = 15,
       window = [5:15] -> trials 5..14
     """
+    if stride_trials is None:
+        stride_trials = window_size_trials
     if window_size_trials > n_trials:
         raise ValueError(f"window_size_trials={window_size_trials} > n_trials={n_trials}")
 
@@ -145,7 +147,6 @@ def effective_dimensionality_95(X_flat: np.ndarray) -> Tuple[int, PCA]:
 
 def trajectory_variance_ambient(
     X_window: np.ndarray,
-    time_mask: np.ndarray,
 ) -> float:
     """
     Across-trial variance at matched times, summed over neurons,
@@ -153,24 +154,21 @@ def trajectory_variance_ambient(
 
     X_window: [n_trials, time, n_neurons]
     """
-    X_sel = X_window[:, time_mask, :]           # [n_trials, t_sel, n_neurons]
-    var_tn = np.var(X_window, axis=0, ddof=1)      # [t_sel, n_neurons]
+    var_tn = np.var(X_window, axis=0, ddof=1)   # [t_sel, n_neurons]
     total_var_t = np.sum(var_tn, axis=1)        # [t_sel]
     return float(np.mean(total_var_t))
 
 
 def trajectory_variance_pca(
     X_window: np.ndarray,
-    time_mask: np.ndarray,
     pca: PCA,
 ) -> float:
     """
     Same as ambient variance, but after projection into PCA space.
     """
-    X_sel = X_window[:, time_mask, :]           # [n_trials, t_sel, n_neurons]
-    n_trials, t_sel, n_neurons = X_sel.shape
+    n_trials, t_sel, n_neurons = X_window.shape
 
-    X_proj = pca.transform(X_sel.reshape(n_trials * t_sel, n_neurons))
+    X_proj = pca.transform(X_window.reshape(n_trials * t_sel, n_neurons))
     X_proj = X_proj.reshape(n_trials, t_sel, -1)
 
     var_tm = np.var(X_proj, axis=0, ddof=1)
@@ -199,7 +197,6 @@ def principal_angle_summary(U1: np.ndarray, U2: np.ndarray) -> Dict[str, float]:
 
 def mean_trajectory_direction(
     X_window: np.ndarray,
-    time_mask: np.ndarray,
 ) -> np.ndarray:
     """
     Mean endpoint displacement direction over selected time interval.
@@ -207,9 +204,8 @@ def mean_trajectory_direction(
     X_window: [n_trials, time, n_neurons]
     Returns unit vector [n_neurons]
     """
-    X_sel = X_window[:, time_mask, :]      # [n_trials, t_sel, n_neurons]
-    start = X_sel[:, 0, :]
-    end = X_sel[:, -1, :]
+    start = X_window[:, 0, :]
+    end = X_window[:, -1, :]
     disp = end - start                     # [n_trials, n_neurons]
     mean_disp = disp.mean(axis=0)
 
@@ -249,6 +245,86 @@ def decoder_alignment_with_mean_direction(
     }
 
 
+def trajectory_point_alignment_pca(
+    X_window: np.ndarray,
+    axis_window: np.ndarray,
+    pca: PCA,
+) -> Dict[str, float]:
+    """
+    For each trajectory, compute alignment as mean cosine similarity 
+    between each point along the trajectory and the mean decoder axis,
+    all computed in PCA space.
+    
+    X_window: [n_trials, time, n_neurons]
+    axis_window: [n_trials, n_neurons]
+    pca: fitted PCA model
+    
+    Returns dict with per-trial and aggregate alignment metrics.
+    """
+    n_trials, T, n_neurons = X_window.shape
+    
+    # Project trajectories to PCA space
+    X_flat = X_window.reshape(n_trials * T, n_neurons)
+    X_proj = pca.transform(X_flat).reshape(n_trials, T, -1)
+    
+    # Project axes to PCA space
+    axis_proj = axis_window @ pca.components_.T  # [n_trials, n_pca]
+    
+    # Mean axis in PCA space
+    axis_mean = axis_proj.mean(axis=0)
+    axis_mean_norm = np.linalg.norm(axis_mean)
+    
+    if axis_mean_norm < 1e-12:
+        return {
+            "mean_alignment_cosine": np.nan,
+            "std_alignment_cosine": np.nan,
+            "per_trial_alignment": np.full(n_trials, np.nan),
+        }
+    
+    axis_mean_normalized = axis_mean / axis_mean_norm
+    
+    # mean trajectory direction in PCA space
+    mean_dir = mean_trajectory_direction(X_window)  # [n_neurons]
+    mean_dir_proj = mean_dir @ pca.components_.T  # [n_pca]
+    mean_dir_proj_norm = np.linalg.norm(mean_dir_proj)
+    if mean_dir_proj_norm < 1e-12:
+        return {
+            "mean_alignment_cosine": np.nan,
+            "std_alignment_cosine": np.nan,
+            "per_trial_alignment": np.full(n_trials, np.nan),
+        }
+    mean_dir_proj_normalized = mean_dir_proj / mean_dir_proj_norm
+
+    
+    # Compute alignment for each trajectory
+    per_trial_cosines = []
+    for trial_idx in range(n_trials):
+        traj = X_proj[trial_idx]  # [T, n_pca]
+        axis_trial = axis_proj[trial_idx]  # [n_pca]
+        
+        # Cosine similarity between each point and mean axis
+        norms = np.linalg.norm(traj, axis=1, keepdims=True)
+        norms = np.where(norms < 1e-12, 1.0, norms)
+        traj_normalized = traj / norms
+
+        axis_trial_norm = np.linalg.norm(axis_trial)
+        if axis_trial_norm < 1e-12:
+            per_trial_cosines.append(np.nan)
+            continue
+        axis_trial_normalized = axis_trial / axis_trial_norm
+
+        cosines = np.dot(traj_normalized, axis_mean_normalized)
+        mean_cosine = float(np.mean(cosines))
+        per_trial_cosines.append(mean_cosine)
+    
+    per_trial_cosines = np.array(per_trial_cosines)
+    
+    return {
+        "mean_alignment_cosine": float(np.nanmean(per_trial_cosines)),
+        "std_alignment_cosine": float(np.nanstd(per_trial_cosines)),
+        "per_trial_alignment": per_trial_cosines,
+    }
+
 # ============================================================
 # Endpoint cloud analysis
 # ============================================================
@@ -287,8 +363,7 @@ def analyze_geometry_windows(
     steps: Optional[Sequence[int]] = None,
     use_bci_only: bool = True,
     window_size_trials: int = 10,
-    stride_trials: int = 1,
-    last_k_time: int = 20,
+    stride_trials: Optional[int] = None,
     pca_dim_m: int = 10,
 ) -> Dict[str, object]:
     """
@@ -304,7 +379,6 @@ def analyze_geometry_windows(
     )
 
     n_trials, T, n_neurons = X.shape
-    '''time_mask = get_last_k_time_mask(T, last_k_time)'''
     windows = make_backward_windows(
         n_trials=n_trials,
         window_size_trials=window_size_trials,
@@ -338,12 +412,15 @@ def analyze_geometry_windows(
         U = manifold_basis_from_pca(pca_m, pca_dim_m)
 
         # trajectory variance
-        var_ambient = trajectory_variance_ambient(Xw, time_mask=time_mask)
-        var_pca = trajectory_variance_pca(Xw, time_mask=time_mask, pca=pca_m)
+        var_ambient = trajectory_variance_ambient(Xw)
+        var_pca = trajectory_variance_pca(Xw, pca=pca_m)
 
         # decoder alignment with mean trajectory direction
-        mean_dir = mean_trajectory_direction(Xw, time_mask=time_mask)
+        mean_dir = mean_trajectory_direction(Xw)
         align = decoder_alignment_with_mean_direction(Aw, mean_dir)
+
+        
+        align_pca = trajectory_point_alignment_pca(Xw, Aw, pca=pca_m)
 
         metric = {
             "window_index": w_idx,
@@ -354,8 +431,8 @@ def analyze_geometry_windows(
             "effective_dim_95": d95,
             "trajectory_variance_ambient": var_ambient,
             "trajectory_variance_pca": var_pca,
-            "decoder_alignment_cosine": align["cosine_alignment"],
-            "decoder_alignment_angle_deg": align["angle_deg"],
+            "decoder_alignment_pointwise_cosine": align_pca["mean_alignment_cosine"],
+            "decoder_alignment_mean_angle_deg": align["angle_deg"],
         }
 
         results["window_metrics"].append(metric)
@@ -385,6 +462,7 @@ def analyze_geometry_windows(
 def fit_global_pca(
     snapshots: List[Dict],
     phase: Optional[str] = None,
+    mode: Optional[str] = "train",
     steps: Optional[Sequence[int]] = None,
     use_bci_only: bool = True,
     n_components: int = 3,
@@ -394,6 +472,7 @@ def fit_global_pca(
         phase=phase,
         steps=steps,
         use_bci_only=use_bci_only,
+        mode=mode,
     )
 
     n_trials, T, n_neurons = X.shape
@@ -422,6 +501,7 @@ def fit_global_pca(
 def fit_phase_pca(
     snapshots: List[Dict],
     phase: str,
+    mode: Optional[str] = "train",
     use_bci_only: bool = True,
     n_components: int = 3,
 ) -> Dict[str, object]:
@@ -430,12 +510,14 @@ def fit_phase_pca(
         phase=phase,
         use_bci_only=use_bci_only,
         n_components=n_components,
+        mode=mode,
     )
 
 
 def fit_phase_endpoint_cloud_pca(
     snapshots: List[Dict],
     phase: str,
+    mode: Optional[str] = "train",
     use_bci_only: bool = True,
     last_k_time: int = 20,
     n_components: int = 3,
@@ -444,6 +526,7 @@ def fit_phase_endpoint_cloud_pca(
         snapshots=snapshots,
         phase=phase,
         use_bci_only=use_bci_only,
+        mode=mode,
     )
 
     n_trials, T, n_neurons = X.shape
@@ -460,187 +543,3 @@ def fit_phase_endpoint_cloud_pca(
         "explained_variance_ratio": pca.explained_variance_ratio_,
     }
 
-
-# ============================================================
-# Plotting
-# ============================================================
-
-def plot_window_metrics(
-    analysis_result: Dict[str, object],
-    axis_shift_step: Optional[int] = None,
-    title_prefix: str = "",
-):
-    wm = analysis_result["window_metrics"]
-    ca = analysis_result["consecutive_alignment"]
-
-    x = np.array([m["end_step"] for m in wm])
-    d95 = np.array([m["effective_dim_95"] for m in wm])
-    var_amb = np.array([m["trajectory_variance_ambient"] for m in wm])
-    var_pca = np.array([m["trajectory_variance_pca"] for m in wm])
-    align_cos = np.array([m["decoder_alignment_cosine"] for m in wm])
-    align_ang = np.array([m["decoder_alignment_angle_deg"] for m in wm])
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-
-    axes[0, 0].plot(x, d95, marker="o")
-    if axis_shift_step is not None:
-        axes[0, 0].axvline(axis_shift_step, linestyle="--")
-    axes[0, 0].set_title(f"{title_prefix}Effective dimensionality (95%)")
-    axes[0, 0].set_xlabel("Window end step")
-    axes[0, 0].set_ylabel("Dimensionality")
-
-    axes[0, 1].plot(x, var_amb, marker="o", label="ambient")
-    axes[0, 1].plot(x, var_pca, marker="o", label="pca")
-    if axis_shift_step is not None:
-        axes[0, 1].axvline(axis_shift_step, linestyle="--")
-    axes[0, 1].set_title(f"{title_prefix}Trajectory variance")
-    axes[0, 1].set_xlabel("Window end step")
-    axes[0, 1].legend()
-
-    axes[1, 0].plot(x, align_cos, marker="o", label="cosine")
-    axes[1, 0].plot(x, align_ang, marker="o", label="angle (deg)")
-    if axis_shift_step is not None:
-        axes[1, 0].axvline(axis_shift_step, linestyle="--")
-    axes[1, 0].set_title(f"{title_prefix}Decoder alignment with mean trajectory")
-    axes[1, 0].set_xlabel("Window end step")
-    axes[1, 0].legend()
-
-    if len(ca) > 0:
-        x2 = np.array([a["end_step_2"] for a in ca])
-        min_ang = np.array([a["min_angle_deg"] for a in ca])
-        max_ang = np.array([a["max_angle_deg"] for a in ca])
-        axes[1, 1].plot(x2, min_ang, marker="o", label="min angle")
-        axes[1, 1].plot(x2, max_ang, marker="o", label="max angle")
-        if axis_shift_step is not None:
-            axes[1, 1].axvline(axis_shift_step, linestyle="--")
-        axes[1, 1].set_title(f"{title_prefix}Consecutive manifold angles")
-        axes[1, 1].set_xlabel("Next window end step")
-        axes[1, 1].set_ylabel("Degrees")
-        axes[1, 1].legend()
-    else:
-        axes[1, 1].set_title("Not enough windows")
-        axes[1, 1].set_axis_off()
-
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_global_pca_trajectories_and_axes(
-    global_pca_result: Dict[str, object],
-    every_k_trials: int = 10,
-    axis_shift_step: Optional[int] = None,
-    title: str = "Global PCA trajectories",
-):
-    X_pca = global_pca_result["X_pca"]
-    A_pca = global_pca_result["A_pca"]
-    snaps = global_pca_result["selected_snapshots"]
-    steps = np.array([s["step"] for s in snaps])
-
-    idxs = list(range(0, len(snaps), every_k_trials))
-    if (len(snaps) - 1) not in idxs:
-        idxs.append(len(snaps) - 1)
-
-    if axis_shift_step is not None:
-        pre_idx = np.where(steps <= axis_shift_step)[0]
-        post_idx = np.where(steps > axis_shift_step)[0]
-        axis1_idx = pre_idx[-1] if len(pre_idx) > 0 else 0
-        axis2_idx = post_idx[0] if len(post_idx) > 0 else len(steps) - 1
-    else:
-        axis1_idx = 0
-        axis2_idx = len(steps) - 1
-
-    axis1_pca = A_pca[axis1_idx]
-    axis2_pca = A_pca[axis2_idx]
-
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
-
-    for i in idxs:
-        traj = X_pca[i]
-        color = "C0" if (axis_shift_step is None or steps[i] <= axis_shift_step) else "C1"
-
-        axes[0].plot(traj[:, 0], traj[:, 1], alpha=0.35, linewidth=1, color=color)
-        axes[0].scatter(traj[0, 0], traj[0, 1], s=15, color=color)
-        axes[0].scatter(traj[-1, 0], traj[-1, 1], s=15, color=color)
-
-        axes[1].plot(traj[:, 0], traj[:, 2], alpha=0.35, linewidth=1, color=color)
-        axes[1].scatter(traj[0, 0], traj[0, 2], s=15, color=color)
-        axes[1].scatter(traj[-1, 0], traj[-1, 2], s=15, color=color)
-
-    axes[0].arrow(0, 0, axis1_pca[0], axis1_pca[1], head_width=0.05, length_includes_head=True, linewidth=2, color="black")
-    axes[0].arrow(0, 0, axis2_pca[0], axis2_pca[1], head_width=0.05, length_includes_head=True, linewidth=2, color="red")
-    axes[0].set_title(f"{title}: PC1-PC2")
-    axes[0].set_xlabel("PC1")
-    axes[0].set_ylabel("PC2")
-
-    axes[1].arrow(0, 0, axis1_pca[0], axis1_pca[2], head_width=0.05, length_includes_head=True, linewidth=2, color="black")
-    axes[1].arrow(0, 0, axis2_pca[0], axis2_pca[2], head_width=0.05, length_includes_head=True, linewidth=2, color="red")
-    axes[1].set_title(f"{title}: PC1-PC3")
-    axes[1].set_xlabel("PC1")
-    axes[1].set_ylabel("PC3")
-
-    plt.tight_layout()
-    plt.show()
-
-    print("Explained variance ratio:", global_pca_result["explained_variance_ratio"])
-
-
-def plot_phase_pca_trajectories(
-    phase_pca_result: Dict[str, object],
-    every_k_trials: int = 5,
-    title: str = "Phase PCA",
-):
-    X_pca = phase_pca_result["X_pca"]
-    snaps = phase_pca_result["selected_snapshots"]
-
-    idxs = list(range(0, len(snaps), every_k_trials))
-    if (len(snaps) - 1) not in idxs:
-        idxs.append(len(snaps) - 1)
-
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
-
-    for i in idxs:
-        traj = X_pca[i]
-        axes[0].plot(traj[:, 0], traj[:, 1], alpha=0.35, linewidth=1)
-        axes[0].scatter(traj[0, 0], traj[0, 1], s=15)
-        axes[0].scatter(traj[-1, 0], traj[-1, 1], s=15)
-
-        axes[1].plot(traj[:, 0], traj[:, 2], alpha=0.35, linewidth=1)
-        axes[1].scatter(traj[0, 0], traj[0, 2], s=15)
-        axes[1].scatter(traj[-1, 0], traj[-1, 2], s=15)
-
-    axes[0].set_title(f"{title}: PC1-PC2")
-    axes[0].set_xlabel("PC1")
-    axes[0].set_ylabel("PC2")
-
-    axes[1].set_title(f"{title}: PC1-PC3")
-    axes[1].set_xlabel("PC1")
-    axes[1].set_ylabel("PC3")
-
-    plt.tight_layout()
-    plt.show()
-
-    print("Explained variance ratio:", phase_pca_result["explained_variance_ratio"])
-
-
-def plot_endpoint_clouds(
-    endpoint_result: Dict[str, object],
-    title: str = "Endpoint cloud PCA",
-):
-    Y = endpoint_result["endpoints_pca"]
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-
-    axes[0].scatter(Y[:, 0], Y[:, 1], alpha=0.7)
-    axes[0].set_title(f"{title}: PC1-PC2")
-    axes[0].set_xlabel("PC1")
-    axes[0].set_ylabel("PC2")
-
-    axes[1].scatter(Y[:, 0], Y[:, 2], alpha=0.7)
-    axes[1].set_title(f"{title}: PC1-PC3")
-    axes[1].set_xlabel("PC1")
-    axes[1].set_ylabel("PC3")
-
-    plt.tight_layout()
-    plt.show()
-
-    print("Explained variance ratio:", endpoint_result["explained_variance_ratio"])
