@@ -1,7 +1,12 @@
 README.md
 pyproject.toml
 core/__init__.py
+core/analysis.py
+core/decoder.py
+core/losses.py
 core/rnn.py
+core/task.py
+core/trainer.py
 cortical_remapping_rnn.egg-info/PKG-INFO
 cortical_remapping_rnn.egg-info/SOURCES.txt
 cortical_remapping_rnn.egg-info/dependency_links.txt
