@@ -10,3 +10,4 @@ ipykernel
 pytest
 tqdm
 matplotlib
+seaborn
