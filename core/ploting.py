@@ -494,8 +494,8 @@ def plot_global_pca_phase_trajectories(
     phase=None,
     sampled_idx=None,
     sample_every=3,
-    fig_size=(18, 5),
-    axis_palette_name="Set2",
+    fig_size=(20, 5),
+    axis_palette_name="Set1",
     phase1_cmap_name="Blues_d",
     phase2_cmap_name="Oranges_d",
     axis1_label="Decoder axis 1",
@@ -585,7 +585,7 @@ def plot_global_pca_phase_trajectories(
     else:
         sampled_idx = np.asarray(sampled_idx)
 
-    axis_palette = sns.color_palette(axis_palette_name, n_colors=2)
+    axis_palette = sns.color_palette(axis_palette_name, n_colors=2+2)
     phase1_cmap = sns.color_palette(phase1_cmap_name, n_colors=max(axis_shift_step, 1))
     phase2_n = max(n_trials_total - axis_shift_step, 1)
     phase2_cmap = sns.color_palette(phase2_cmap_name, n_colors=phase2_n)
@@ -605,7 +605,7 @@ def plot_global_pca_phase_trajectories(
         ax.arrow(
             0, 0,
             axis1_coords[0], axis1_coords[1],
-            color=axis_palette[0],
+            color=axis_palette[0+2],
             width=axis_arrow_width,
             head_width=axis_arrow_head_width,
             length_includes_head=True,
@@ -615,7 +615,7 @@ def plot_global_pca_phase_trajectories(
         ax.arrow(
             0, 0,
             axis2_coords[0], axis2_coords[1],
-            color=axis_palette[1],
+            color=axis_palette[1+2],
             width=axis_arrow_width,
             head_width=axis_arrow_head_width,
             length_includes_head=True,
