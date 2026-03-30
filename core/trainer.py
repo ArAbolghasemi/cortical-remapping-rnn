@@ -22,7 +22,7 @@ class TrainerConfig:
     freeze_trial_inputs: bool = True
 
     # input scaling
-    input_scaling_mode: str = "cursor_mean"   # "none", "cursor_mean"
+    input_scaling_mode: str = "cursor_mean"   # "none", "cursor_mean", "cursor_prev"
     input_scale_constant: float = 0     # used if you want fixed scaling
     input_scale_gain: float = 1.0      # gain for cursor-dependent scaling
     input_scale_offset: float = 0.0    # optional offset
@@ -157,7 +157,7 @@ class BCITrainer:
     def resample_decoder_axis(self) -> None:
         self.decoder.resample_axis()
 
-    def _forward_batch(
+    '''def _forward_batch(
         self,
         batch_size: int,
         input_noise: bool,
@@ -229,6 +229,125 @@ class BCITrainer:
             "weights": weights,
             "loss": loss,
         }
+'''
+    
+    def _forward_batch(
+        self,
+        batch_size: int,
+        input_noise: bool,
+        rnn_noise: bool,
+    ) -> Dict[str, torch.Tensor]:
+
+        if self.cfg.freeze_trial_inputs:
+            trial = generate_trial_inputs(
+                batch_size=batch_size,
+                cfg=self.trial_cfg,
+                noise=input_noise,
+                baseline_input=self.fixed_epoch_inputs["baseline"],
+                task_input=self.fixed_epoch_inputs["task"],
+                late_input=self.fixed_epoch_inputs["late"],
+            )
+            epoch_ids = self.fixed_epoch_ids
+        else:
+            trial = generate_trial_inputs(
+                batch_size=batch_size,
+                cfg=self.trial_cfg,
+                noise=input_noise,
+            )
+            epoch_ids = trial["epoch_ids"].to(self.cfg.device)
+
+        x_raw = trial["x"].to(self.cfg.device)   # [B, T, n_in]
+        B, T, _ = x_raw.shape
+
+        # ---------------------------------------------------------
+        # input scaling modes
+        # ---------------------------------------------------------
+        if self.cfg.input_scaling_mode == "none":
+            input_scale = torch.ones(B, T, device=self.cfg.device)
+            x = x_raw
+
+            out = self.rnn(x, noise=rnn_noise)
+            states = out["states"]               # [B, T, n_rec]
+            cursor = self.decoder(states)        # [B, T]
+
+        elif self.cfg.input_scaling_mode == "cursor_mean":
+            # first pass: get scalar scale from mean cursor
+            out_pre = self.rnn(x_raw, noise=rnn_noise)
+            states_pre = out_pre["states"]
+            cursor_pre = self.decoder(states_pre)
+
+            scalar_scale = self._compute_input_scale(cursor_pre)   # scalar
+            x = x_raw * scalar_scale
+            input_scale = scalar_scale.expand(B, T)
+
+            out = self.rnn(x, noise=rnn_noise)
+            states = out["states"]
+            cursor = self.decoder(states)
+
+        elif self.cfg.input_scaling_mode == "cursor_prev":
+            h = self.rnn.initial_state(batch_size=B)
+
+            states_list = []
+            cursor_list = []
+            x_scaled_list = []
+            scale_list = []
+
+            prev_cursor = torch.zeros(B, device=self.cfg.device, dtype=x_raw.dtype)
+
+            for t in range(T):
+                if self.cfg.detach_scaling_signal:
+                    prev_cursor_for_scale = prev_cursor.detach()
+                else:
+                    prev_cursor_for_scale = prev_cursor
+
+                scale_t = (
+                    self.cfg.input_scale_offset
+                    + self.cfg.input_scale_constant
+                    + self.cfg.input_scale_gain * prev_cursor_for_scale
+                )
+                scale_t = torch.clamp(scale_t, min=0.1, max=10.0)     # [B]
+
+                x_t = x_raw[:, t, :] * scale_t[:, None]               # [B, n_in]
+                h = self.rnn.step(h, x_t, noise=rnn_noise)            # [B, n_rec]
+
+                cursor_t = self.decoder(h.unsqueeze(1)).squeeze(1)    # [B]
+
+                states_list.append(h)
+                cursor_list.append(cursor_t)
+                x_scaled_list.append(x_t)
+                scale_list.append(scale_t)
+
+                prev_cursor = cursor_t
+
+            states = torch.stack(states_list, dim=1)      # [B, T, n_rec]
+            cursor = torch.stack(cursor_list, dim=1)      # [B, T]
+            x = torch.stack(x_scaled_list, dim=1)         # [B, T, n_in]
+            input_scale = torch.stack(scale_list, dim=1)  # [B, T]
+
+        else:
+            raise ValueError(f"Unknown input_scaling_mode: {self.cfg.input_scaling_mode}")
+
+        target_out = make_cursor_target(
+            batch_size=batch_size,
+            epoch_ids=epoch_ids,
+            cfg=self.target_cfg,
+        )
+        target = target_out["target"].to(self.cfg.device)
+        weights = target_out["weights"].to(self.cfg.device)
+
+        loss = weighted_cursor_mse(cursor, target, weights)
+
+        return {
+            "x": x,
+            "x_raw": x_raw,
+            "input_scale": input_scale,
+            "epoch_ids": epoch_ids,
+            "states": states,
+            "cursor": cursor,
+            "target": target,
+            "weights": weights,
+            "loss": loss,
+        }
 
     def _compute_metrics(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         cursor = batch["cursor"]
@@ -243,13 +362,29 @@ class BCITrainer:
         def _masked_mean(x: torch.Tensor, mask: torch.Tensor) -> float:
             return float(x[:, mask].mean().item())
 
-        input_scale = batch.get("input_scale", torch.tensor(1.0, device=cursor.device))
+        '''input_scale = batch.get("input_scale", torch.tensor(1.0, device=cursor.device))
 
         return {
             "loss_value": float(loss.item()),
             "cursor_mean": float(cursor.mean().item()),
             "cursor_std": float(cursor.std().item()),
             "input_scale": float(input_scale.item()),
+            "baseline_cursor_mean": _masked_mean(cursor, baseline_mask),
+            "task_cursor_mean": _masked_mean(cursor, task_mask),
+            "late_cursor_mean": _masked_mean(cursor, late_mask),
+            "baseline_target_mean": _masked_mean(target, baseline_mask),
+            "task_target_mean": _masked_mean(target, task_mask),
+            "late_target_mean": _masked_mean(target, late_mask),
+        }'''
+    
+        input_scale = batch.get("input_scale", torch.ones_like(cursor))
+
+        return {
+            "loss_value": float(loss.item()),
+            "cursor_mean": float(cursor.mean().item()),
+            "cursor_std": float(cursor.std().item()),
+            "input_scale_mean": float(input_scale.mean().item()),
+            "input_scale_std": float(input_scale.std().item()),
             "baseline_cursor_mean": _masked_mean(cursor, baseline_mask),
             "task_cursor_mean": _masked_mean(cursor, task_mask),
             "late_cursor_mean": _masked_mean(cursor, late_mask),
@@ -279,10 +414,11 @@ class BCITrainer:
             "axis": self.decoder.axis.detach().cpu().clone(),
             "bci_indices": self.decoder.neuron_indices.detach().cpu().clone(),
             "loss": float(batch["loss"].item()),
-            "input_scale": float(batch["input_scale"].item()) if "input_scale" in batch else 1.0,
+            #"input_scale": float(batch["input_scale"].item()) if "input_scale" in batch else 1.0,
+            "input_scale": batch["input_scale"][b].detach().cpu() if "input_scale" in batch else None,
             "x_raw": batch["x_raw"][b].detach().cpu() if "x_raw" in batch else None,
         }
-
+        
     @torch.no_grad()
     def probe(
         self,

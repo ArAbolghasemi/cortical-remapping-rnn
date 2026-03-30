@@ -385,12 +385,14 @@ def analyze_geometry_windows(
         stride_trials=stride_trials,
     )
 
-    #TODO: found corresponding trial to window 
+    selected_trials = [s["step"]-1 for s in snaps]
+
     results = {
         "X": X,
         "A": A,
         "epoch_ids": epoch_ids,
         "selected_snapshots": snaps,
+        "selected_trials": selected_trials,
         "windows": windows,
         "window_metrics": [],
         "consecutive_alignment": [],
@@ -401,8 +403,14 @@ def analyze_geometry_windows(
     bases = []
 
     for w_idx, (start, end) in enumerate(windows):
-        Xw = X[start:end]                    # [k_trials, T, n_neurons]
-        Aw = A[start:end]                    # [k_trials, n_neurons]
+        # let find the closest snapshot to the start that is >= start, and closest snapshot to the end that is <= end 
+        start_idx = np.searchsorted(selected_trials, start, side='left')
+        end_idx = np.searchsorted(selected_trials, end-2, side='right')
+        if end_idx <= start_idx:
+            raise ValueError(f"Invalid trial window size, either increase window_size_trials or save the snapshots more frequently.")
+
+        Xw = X[start_idx:end_idx+1]                    # [k_trials, T, n_neurons]
+        Aw = A[start_idx:end_idx+1]                    # [k_trials, n_neurons]
         Xw_flat = Xw.reshape(-1, n_neurons)
 
         # dimensionality on this trial window
@@ -427,8 +435,8 @@ def analyze_geometry_windows(
             "window_index": w_idx,
             "start_trial_idx": start,
             "end_trial_idx": end - 1,
-            "start_step": snaps[start]["step"],
-            "end_step": snaps[end - 1]["step"],
+            "start_step": snaps[start_idx]["step"],
+            "end_step": snaps[end_idx]["step"],
             "effective_dim_95": d95,
             "trajectory_variance_ambient": var_ambient,
             "trajectory_variance_pca": var_pca,
@@ -476,6 +484,8 @@ def fit_global_pca(
         mode=mode,
     )
 
+    selected_trials = [s["step"]-1 for s in snaps]
+
     n_trials, T, n_neurons = X.shape
     X_flat = X.reshape(n_trials * T, n_neurons)
     pca = fit_pca_safe(X_flat, n_components=n_components)
@@ -492,6 +502,7 @@ def fit_global_pca(
         "epoch_ids": epoch_ids,                                     # epoch labels for each time point [time]
         "selected_snapshots": snaps,                                # list of snapshots used in PCA
         "explained_variance_ratio": pca.explained_variance_ratio_,  # variance explained by each PC
+        "selected_trials": selected_trials,                         # trial indices corresponding to selected snapshots
     }
 
 

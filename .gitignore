@@ -1,0 +1,176 @@
+# ==================================================
+# Python
+# ==================================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# ==================================================
+# Jupyter
+# ==================================================
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# ==================================================
+# Data (raw + processed)
+# ==================================================
+data/
+raw/
+processed/
+intermediate/
+cache/
+tmp/
+temp/
+
+# Neuropixels / electrophysiology
+*.ap.bin
+*.lf.bin
+*.dat
+*.ns*
+*.nev
+*.ncs
+*.nse
+*.plx
+*.smrx
+*.rhd
+*.rhs
+*.imec*
+*.kilosort*
+*.phy*
+*.cbin
+*.meta
+
+# NWB / HDF5
+*.nwb
+*.h5
+*.hdf5
+
+# Pickles / numpy
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# ==================================================
+# Figures & media (ignored during development)
+# ==================================================
+figures/
+plots/
+results/
+outputs/
+
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.svg
+*.eps
+*.pdf
+
+# Video
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ==================================================
+# LaTeX
+# ==================================================
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+
+# ==================================================
+# MATLAB
+# ==================================================
+# Autosave / backups
+*.asv
+*.m~
+*.autosave
+
+# MATLAB live editor
+*.mlx
+
+# Compiled MATLAB
+*.mex*
+*.ctf
+
+# MATLAB cache & temp
+matlab_crash_dump*
+.slprj/
+sccprj/
+codegen/
+*.prj
+
+# Simulink
+*.slxc
+*.slx~
+*.mdl~
+*.mdlp
+
+# ==================================================
+# Logs & runtime
+# ==================================================
+*.log
+logs/
+*.out
+*.err
+
+# ==================================================
+# OS / editors
+# ==================================================
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+
+# ==================================================
+# Tooling / QA
+# ==================================================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ==================================================
+# Environment & secrets
+# ==================================================
+.env
+.env.*
+*.env
+
+# ==================================================
+# Misc
+# ==================================================
+*.swp
+*.swo
+*~
