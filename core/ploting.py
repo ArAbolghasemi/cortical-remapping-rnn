@@ -248,7 +248,7 @@ def plot_geometry_metrics(
     x_label_next="Next window start trial",
     y_label_dim="Dimensionality",
     y_label_var="Variance",
-    y_label_align="Cosine alignment",
+    y_label_align="Angle (deg)",
     y_label_angle="Angle (deg)",
     effective_dim_label="Effective dim (95%)",
     ambient_var_label="Ambient variance",
@@ -393,7 +393,7 @@ def plot_geometry_metrics(
     axes[0, 1].set_ylabel(y_label_var)
 
     # -------------------------
-    # 3) Decoder alignment cosine
+    # 3) Decoder alignment decoder_alignment_mean_angle_deg
     # -------------------------
     for (name, analysis), color in zip(analyses, colors):
         wm = analysis["window_metrics"]
@@ -401,7 +401,7 @@ def plot_geometry_metrics(
             continue
 
         x_win = np.array([m["start_step"] for m in wm])
-        align_cos = np.array([m["decoder_alignment_pointwise_cosine"] for m in wm], dtype=float)
+        align_cos = np.array([m["decoder_alignment_mean_angle_deg"] for m in wm], dtype=float)
 
         axes[1, 0].plot(
             x_win, align_cos,

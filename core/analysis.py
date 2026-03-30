@@ -269,31 +269,6 @@ def trajectory_point_alignment_pca(
     
     # Project axes to PCA space
     axis_proj = axis_window @ pca.components_.T  # [n_trials, n_pca]
-    
-    # Mean axis in PCA space
-    axis_mean = axis_proj.mean(axis=0)
-    axis_mean_norm = np.linalg.norm(axis_mean)
-    
-    if axis_mean_norm < 1e-12:
-        return {
-            "mean_alignment_cosine": np.nan,
-            "std_alignment_cosine": np.nan,
-            "per_trial_alignment": np.full(n_trials, np.nan),
-        }
-    
-    axis_mean_normalized = axis_mean / axis_mean_norm
-    
-    # mean trajectory direction in PCA space
-    mean_dir = mean_trajectory_direction(X_window)  # [n_neurons]
-    mean_dir_proj = mean_dir @ pca.components_.T  # [n_pca]
-    mean_dir_proj_norm = np.linalg.norm(mean_dir_proj)
-    if mean_dir_proj_norm < 1e-12:
-        return {
-            "mean_alignment_cosine": np.nan,
-            "std_alignment_cosine": np.nan,
-            "per_trial_alignment": np.full(n_trials, np.nan),
-        }
-    mean_dir_proj_normalized = mean_dir_proj / mean_dir_proj_norm
 
     
     # Compute alignment for each trajectory
@@ -313,7 +288,7 @@ def trajectory_point_alignment_pca(
             continue
         axis_trial_normalized = axis_trial / axis_trial_norm
 
-        cosines = np.dot(traj_normalized, axis_mean_normalized)
+        cosines = np.dot(traj_normalized, axis_trial_normalized)
         mean_cosine = float(np.mean(cosines))
         per_trial_cosines.append(mean_cosine)
     
